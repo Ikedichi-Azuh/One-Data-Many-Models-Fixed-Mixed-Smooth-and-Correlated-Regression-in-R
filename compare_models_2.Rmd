@@ -1,0 +1,247 @@
+---
+title: "One Data, Many Models: Fixed, Mixed, Smooth, and Correlated Regression in R"
+author: "Ikedichi Edward Azuh"
+date: "4/8/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Regression analysis is one of the most widely used statistical tools in ecology, biology, environmental science, and many other disciplines. Although the simple linear model is often the starting point, real data frequently contain additional complexities such as grouped observations, hierarchical structure, and correlation among observations. Consequently, several modeling frameworks have been developed to address these challenges while still operating under the assumption of a Gaussian (normal) response variable.
+
+This lecture introduces and compares several approaches for modeling Gaussian data in R, including classical linear models (`lm()`), linear mixed-effects models (`lme()` and `lmer()`), generalized additive models (`gam()`), generalized linear mixed models fitted with `glmmTMB()`, and generalized least squares models (`gls()`). Using a simulated dataset with group-specific intercepts and slopes, we demonstrate how each method represents the same underlying relationship between the response and explanatory variable, while differing in their assumptions about group-level variation and residual structure.
+
+By the end of this lecture, students should be able to:
+
+*  Understand the differences between fixed-effects, mixed-effects, smooth, and correlated-error models.
+*  Recognize when grouped or hierarchical data require more than a simple linear regression.
+*  Fit and interpret Gaussian regression models using several commonly used R packages.
+*  Perform appropriate model diagnostics for different model classes.
+*  Compare competing models using information criteria and predictive performance metrics.
+*  Appreciate that different statistical frameworks can often yield similar conclusions while providing different interpretations of variation in the data.
+
+The overarching goal of this lecture is to develop an intuitive understanding of how different regression frameworks relate to one another and to provide practical guidance on selecting and interpreting models for Gaussian response data in R.
+
+
+# 1.0 The data simulation
+We simulate a hierarchical data with group-specific intercepts and slopes
+```{r , warning=FALSE, message=FALSE}
+
+N <- seq(50, by=25, len=8)
+
+set.seed(1)
+
+x <- seq(0, 100, len=1100)
+intercept <- rnorm(8, 10, 3)
+slope <- rnorm(8, 4, 1)
+
+make.data <- function(j){
+
+  x <- sample(x, size = N[j], replace = FALSE)
+
+  err <- rnorm(N[j], 0, 23)
+
+  y <- intercept[j] + slope[j] * x + err 
+
+  data.frame(
+    y = y,
+    x = x,
+    group = factor(j)
+  )
+}
+
+dats <- do.call(rbind, lapply(1:8, make.data))
+#dats <- make.data(1)
+#for (i in 2:length(N)) dats <- rbind.data.frame(dats, make.data(i))
+
+dats$group <- as.factor(dats$group)
+plot(as.ts(dats$y))
+```
+
+# 2.0 Data visualization plot 
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+library(ggplot2)
+
+a <- ggplot(dats, aes(y=1:nrow(dats),x=y, color=group))+geom_point() +
+  ggtitle("Distribution of Y by group") +
+  theme_bw() + 
+  theme(plot.title=element_text(color="black",size=14,face="bold",hjust=0.5),
+        axis.title.x = element_text(color="black", size=14, face="bold"),
+        axis.title.y = element_blank()
+  )
+
+b <- ggplot(dats, aes(x,y, color=group))+geom_point() +
+  ggtitle("Y vs X relationship by group") +
+  theme_bw() + 
+  theme(plot.title=element_text(color="black",size=14,face="bold",hjust=0.5),
+        axis.title.x = element_text(color="black", size=14, face="bold"),
+        axis.title.y = element_text(color="black", size=14, face="bold")
+  )
+par(mfrow=c(1,2))
+a;b
+```
+
+# 3.0 Models fitting 
+## 3.1 Fixed effect model using lm()
+Fixed-effect model allowing group-specific intercepts and slopes (no pooling).
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+library(nlme)
+library(lme4)
+library(mgcv)
+library(glmmTMB)
+
+
+summary(fit.lm <- lm(y ~ x*group, dats))
+```
+
+
+
+## 3.2 Mixed effects models using lmer(), lm() and glmmTMB()
+Slope and intercept are random.
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+summary(fit.lmer <- lmer(y ~ x + (x|group),dats)) 
+summary(fit.tmb <- glmmTMB(y ~ x + (x|group),dats)) 
+summary(fit.lme <- lme(y ~ x , random = ~ x|group, dats)) 
+```
+
+
+
+## 3.3 Mixed effects (smooth) model using gam()
+
+s(group, x, bs = "re"): this formulation represents group-specific deviations in the x-effect using penalized regression, in a way that is closely related to a random slope model.
+
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+
+summary(fit.gam <- gam(y ~ x + s(group,x,bs = 're'),data = dats, method = 'REML'))
+
+```
+
+
+## 3.4 Correlated error model using gls()
+Although the data do not contain true autocorrelation, GLS is included to demonstrate how a model with an explicit correlation structure behaves under a correctly specified vs misspecified setting.
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+
+summary(fit.gls <- gls(y ~ x*group , corr = corARMA(form = ~1|group,p=2,q=0), data=dats))
+
+```
+
+
+# 4.0 Model Diagnostics
+## 4.1 lm
+```{r ,fig.width=8, fig.height=4, warning=FALSE, message=FALSE}
+library(DHARMa)
+
+simulationOutput <- simulateResiduals(fittedModel = fit.lm, plot = T)
+
+#acf(residuals(fit.lm)) no sign of autocorrelation
+```
+
+## 4.2 lmer
+```{r ,fig.width=8, fig.height=4, warning=FALSE, message=FALSE}
+
+simulationOutput <- simulateResiduals(fittedModel = fit.lmer, plot = T)
+#acf(residuals(fit.lmer))
+```
+
+## 4.3 gam
+```{r ,fig.width=8, fig.height=4, warning=FALSE, message=FALSE}
+#install.packages("mgcViz")
+simulationOutput <- simulateResiduals(fittedModel = fit.gam, plot = T)
+
+```
+
+
+
+## 4.4 TMB 
+```{r ,fig.width=8, fig.height=4, warning=FALSE, message=FALSE}
+
+simulationOutput <- simulateResiduals(fittedModel = fit.tmb, plot = T)
+
+```
+
+
+## 4.5 lme
+
+DHARMa package is not directly useable for lme and gls. So we use classic approach.
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+par(mfrow = c(1,2))
+
+res <- residuals(fit.lme)
+
+qqnorm(res)
+qqline(res, col = "red", lwd = 2)
+
+plot(fitted(fit.lme), res,
+     xlab = "Fitted values",
+     ylab = "Residuals",
+     main = "Residuals vs fitted")
+abline(h = 0, col = "red")
+
+par(mfrow = c(1,1))
+
+qqnorm(fit.lme, ~ ranef(., level=1))
+
+plot(fit.lme, resid(., type = "p") ~ fitted(.) | group, 
+     id = 0.05, adj = -0.3 , main="Standardized residuals vs fitted values by group") # to check for equal variances between groups
+
+```
+
+## 4.6 gls
+```{r ,fig.width=10, fig.height=6, warning=FALSE, message=FALSE}
+par(mfrow = c(1,2))
+
+res <- residuals(fit.gls)
+
+qqnorm(res)
+qqline(res, col = "red", lwd = 2)
+
+plot(fitted(fit.gls), res,
+     xlab = "Fitted values",
+     ylab = "Residuals",
+     main = "Residuals vs fitted")
+abline(h = 0, col = "red")
+
+par(mfrow = c(1,1))
+
+plot(fit.gls, resid(., type = "p") ~ fitted(.) | group, abline = 0, main="Standardized residuals vs fitted values by group") 
+plot(fit.gls, group ~ resid(.), main="Box-plots of residuals by group") 
+
+```
+
+# 5.0 Model Comparison
+All models yield similar predictive performance under gaussian assumptions, but differ in how they allocate variation between group effects and residual error.
+ 
+```{r , fig.width=10, fig.height=6,warning=FALSE, message=FALSE}
+library(Metrics)
+library(knitr)
+
+get_metrics <- function(model, name){
+
+  pred <- predict(model, newdata = dats, allow.new.levels = TRUE)
+
+  data.frame(
+    Model = name,
+    AIC = AIC(model),
+    RMSE = rmse(dats$y, pred),
+    MAE = mae(dats$y, pred)
+  )
+}
+
+results <- rbind(
+  get_metrics(fit.lm, "lm"),
+  get_metrics(fit.lmer, "lmer"),
+  get_metrics(fit.gam, "gam"),
+  get_metrics(fit.tmb, "tmb"),
+  get_metrics(fit.lme, "lme"),
+  get_metrics(fit.gls, "gls")
+)
+
+knitr::kable(results, caption = "Model comparison")
+
+```
